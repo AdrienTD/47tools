@@ -154,9 +154,13 @@ if (prot != None) and (pclp != None):
     pver = root.FindSubchunk(b"PVER").Read()
     pfac = root.FindSubchunk(b"PFAC").Read()
     pmtx = root.FindSubchunk(b"PMTX").Read()
+    puvc = root.FindSubchunk(b"PUVC").Read()
     hexdump(sys.stdout, phea[0:32])
+    objid = 0
     
     def EnumProt(p, tnode):
+        global objid
+        objid += 1
         heado, = struct.unpack("<I", p.tag)
         stat = heado >> 24
         heado &= 0xFFFFFF
@@ -171,13 +175,13 @@ if (prot != None) and (pclp != None):
             if c == 0: break
             s += chr(c)
             o += 1
-        e = tree.AppendItem(tnode, "%s (%i)" % (s,stat)) #"%08X" % heado)
+        e = tree.AppendItem(tnode, "%s (id %i, fl %i)" % (s,objid,stat)) #"%08X" % heado)
         tree.SetItemData(e, heado)
         for c in p.children:
             EnumProt(c, e)
 
     trt = tree2.AddRoot("SPK")
-    for p in (prot, pclp):
+    for p in (pclp, prot):
         e = tree2.AppendItem(trt, p.string)
         for c in p.children:
             EnumProt(c, e)
@@ -256,10 +260,69 @@ def selentitychanged(event):
         objtype,objflags = struct.unpack("<HH", phea[o+20:o+24])
         t.write("Type: %s (0x%X)\n" % (objtypenames.get(objtype, "?"), objtype))
         t.write("Flags: 0x%04X\n" % objflags)
-        t.write("\nPHEA dump:\n")
-        hexdump(t, phea[o:o+64])
-        #t.write("\nPDBL dump:\n")
-        #hexdump(t, pdbl[dblo:dblo+64])
+        #t.write("\nPHEA dump:\n")
+        #hexdump(t, phea[o:o+64])
+        t.write("\nPDBL dump:\n")
+        dblsiz, = struct.unpack("<I", pdbl[dblo:dblo+4])
+        dblsiz &= 0x00FFFFFF
+        hexdump(t, pdbl[dblo:dblo+dblsiz])
+        t.write("\nPDBL:\n")
+        dd = dblo+4
+        while dd < dblo+dblsiz:
+            dt = pdbl[dd] & 0x3F
+            t.write("0x%02X: " % pdbl[dd])
+            dd += 1
+            if dt == 1:
+                t.write("Double: %f\n" % struct.unpack("<d", pdbl[dd:dd+8]))
+                dd += 8
+            elif dt == 2:
+                t.write("Float: %f\n" % struct.unpack("<f", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 3:
+                t.write("Integer: %i\n" % struct.unpack("<i", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 4:
+                t.write("String: ")
+                while pdbl[dd] != 0:
+                    t.write(chr(pdbl[dd]))
+                    dd += 1
+                dd += 1
+                t.write("\n")
+            elif dt == 5:
+                t.write("FN String: ")
+                while pdbl[dd] != 0:
+                    t.write(chr(pdbl[dd]))
+                    dd += 1
+                dd += 1
+                t.write("\n")
+            elif dt == 6:
+                t.write("---- Separator ----\n")
+            elif dt == 7:
+                s, = struct.unpack("<I", pdbl[dd:dd+4])
+                t.write("Data: %u bytes\n" % (s-4))
+                dd += s
+            elif dt == 8:
+                t.write("Object: %i\n" % struct.unpack("<i", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 9:
+                s, = struct.unpack("<I", pdbl[dd:dd+4])
+                t.write("9 Data: %u bytes\n" % (s-4))
+                dd += s
+            elif dt == 0xA:
+                t.write("A Integer: %i\n" % struct.unpack("<i", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 0xB:
+                t.write("B Integer: %i\n" % struct.unpack("<i", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 0xC:
+                t.write("C Integer: %i\n" % struct.unpack("<i", pdbl[dd:dd+4]))
+                dd += 4
+            elif dt == 63:
+                t.write("-------- End --------\n")
+                #break
+            else:
+                t.write("Unknown type %u\n" % dt)
+                
         t.write("\n3x3 rotation matrix:\n")
         dmx = [[0]*3,[0]*3,[0]*3]
         for i in range(2):
@@ -298,19 +361,26 @@ def selentitychanged(event):
 ##                    if ftxv[i] > maxftxv[i]:
 ##                        maxftxv[i] = ftxv[i]
 ##                    t.write("%02X: %08X, %08X\n" % (i*4, ftxv[i], maxftxv[i]))
-                #nfaces, = struct.unpack("<I", pftx[ftxo-1+8:ftxo-1+12])
+##                uo,uo2,nfaces, = struct.unpack("<3I", pftx[ftxo-1:ftxo-1+12])
                 #t.write("\nPFTX %i faces:\n" % nfaces)
                 #for i in range(nfaces):
                 #    hexdump(t, pftx[ftxo-1+12+12*i:ftxo-1+12+12*i+12])
-            t.write("\nPHEA Val,Max,Par:\n")
-            heav = struct.unpack("<16I", phea[o:o+16*4])
-            for i in range(16):
-                if heav[i] > maxheav[i]:
-                    maxheav[i] = heav[i]
-                if heav[i] != 0:
-                    if heav[i] & 1: parheav[i] |= 1
-                    else: parheav[i] |= 2
-                t.write("%02X: %08X, %08X, parity: %i\n" % (i*4, heav[i], maxheav[i], parheav[i]))
+##                t.write("\nUV coordinates:\n")
+##                for i in range(nfaces):
+##                    for j in range(4):
+##                        puvcoff = uo*4+(i*4+j)*8
+##                        t.write(str(struct.unpack("<2f", puvc[puvcoff:puvcoff+8])))
+##                        t.write("\n")
+                
+##            t.write("\nPHEA Val,Max,Par:\n")
+##            heav = struct.unpack("<16I", phea[o:o+16*4])
+##            for i in range(16):
+##                if heav[i] > maxheav[i]:
+##                    maxheav[i] = heav[i]
+##                if heav[i] != 0:
+##                    if heav[i] & 1: parheav[i] |= 1
+##                    else: parheav[i] |= 2
+##                t.write("%02X: %08X, %08X, parity: %i\n" % (i*4, heav[i], maxheav[i], parheav[i]))
 ##            t.write("\nOBJ conversion:\n")
 ##            for v in range(numverts):
 ##                crd = struct.unpack("<fff", pver[vertstart*4+v*12:vertstart*4+v*12+12])
@@ -385,11 +455,20 @@ def countPFTXFaces(event):
     totalfaces = 0
     p = 0
     lg = len(pftx)
+    mmin = 6 * [ 32767]
+    mmax = 6 * [-32768]
     while p < lg:
         v1,v2,nfaces = struct.unpack("<III", pftx[p:p+12])
         totalfaces += nfaces
-        p += nfaces * 12
+        p += 12
+        for i in range(nfaces):
+            s = struct.unpack("<6h", pftx[p:p+12])
+            mmin = [min(mmin[i],s[i]) for i in range(6)]
+            mmax = [max(mmax[i],s[i]) for i in range(6)]
+            p += 12
     print("Total faces: ", totalfaces)
+    print("Value min: ", mmin)
+    print("Value max: ", mmax)
 
 def readStrFromPNAM(nameo):
     s = ""
